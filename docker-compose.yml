@@ -1,0 +1,83 @@
+services:
+  mongodb:
+    image: mongo:7
+    container_name: helpdesk_mongo
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      test: echo 'db.runCommand("ping").ok' | mongosh localhost:27017/test --quiet
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  ai-service:
+    build:
+      context: ./ai-service
+      dockerfile: Dockerfile
+    container_name: helpdesk_ai
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
+    volumes:
+      - ./backend/dataset:/app/dataset:ro
+    environment:
+      - FLASK_ENV=production
+      - PORT=3001
+      - DATASET_PATH=/app/dataset
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3001/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: helpdesk_backend
+    restart: unless-stopped
+    ports:
+      - "5000:5000"
+    environment:
+      - NODE_ENV=production
+      - PORT=5000
+      - MONGO_URI=mongodb://mongodb:27017/helpdesk_db
+      - JWT_SECRET=change_this_to_a_very_long_secure_random_string_in_production
+      - JWT_EXPIRE=7d
+      - AI_SERVICE_URL=http://ai-service:3001
+      - CLIENT_URL=http://localhost:3000
+      - SLA_CRITICAL_HOURS=1
+      - SLA_HIGH_HOURS=4
+      - SLA_MEDIUM_HOURS=24
+      - SLA_LOW_HOURS=72
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      ai-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:5000/api/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: helpdesk_frontend
+    restart: unless-stopped
+    ports:
+      - "3000:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    environment:
+      - REACT_APP_API_URL=http://localhost:5000/api
+
+volumes:
+  mongo_data:
+    name: helpdesk_mongo_data
