@@ -1,0 +1,202 @@
+[
+  {
+    "text": "Cannot connect to VPN from home office",
+    "category": "Network",
+    "priority": "High"
+  },
+  {
+    "text": "WiFi keeps disconnecting in conference room",
+    "category": "Network",
+    "priority": "Medium"
+  },
+  {
+    "text": "Internet is extremely slow on the 2nd floor",
+    "category": "Network",
+    "priority": "Medium"
+  },
+  {
+    "text": "DNS resolution failing for internal sites",
+    "category": "Network",
+    "priority": "High"
+  },
+  {
+    "text": "Firewall blocking access to development servers",
+    "category": "Network",
+    "priority": "High"
+  },
+  {
+    "text": "Network printer not reachable from VLAN 10",
+    "category": "Network",
+    "priority": "Medium"
+  },
+  {
+    "text": "Production server is completely down and unresponsive",
+    "category": "Network",
+    "priority": "Critical"
+  },
+  {
+    "text": "Bandwidth throttling affecting video conferences",
+    "category": "Network",
+    "priority": "Medium"
+  },
+  {
+    "text": "Printer on 3rd floor showing offline status",
+    "category": "Hardware",
+    "priority": "Medium"
+  },
+  {
+    "text": "Laptop screen flickering intermittently",
+    "category": "Hardware",
+    "priority": "Medium"
+  },
+  {
+    "text": "Keyboard not responding after spill",
+    "category": "Hardware",
+    "priority": "Medium"
+  },
+  {
+    "text": "Monitor displays no signal when connected to dock",
+    "category": "Hardware",
+    "priority": "Medium"
+  },
+  {
+    "text": "Laptop battery drains in 30 minutes",
+    "category": "Hardware",
+    "priority": "High"
+  },
+  {
+    "text": "Blue screen of death on startup IRQL_NOT_LESS_OR_EQUAL",
+    "category": "Hardware",
+    "priority": "High"
+  },
+  {
+    "text": "USB ports not recognizing any devices",
+    "category": "Hardware",
+    "priority": "Medium"
+  },
+  {
+    "text": "Webcam not detected in Teams or Zoom",
+    "category": "Hardware",
+    "priority": "Low"
+  },
+  {
+    "text": "Outlook crashes when opening PDF attachments",
+    "category": "Software",
+    "priority": "Medium"
+  },
+  {
+    "text": "Need to install Adobe Acrobat Pro for PDF editing",
+    "category": "Software",
+    "priority": "Low"
+  },
+  {
+    "text": "Microsoft Teams meeting recording not saving",
+    "category": "Software",
+    "priority": "Medium"
+  },
+  {
+    "text": "Excel macro throwing runtime error 1004",
+    "category": "Software",
+    "priority": "Medium"
+  },
+  {
+    "text": "Windows update stuck at 40 percent for 3 hours",
+    "category": "Software",
+    "priority": "Medium"
+  },
+  {
+    "text": "Application license expired need renewal",
+    "category": "Software",
+    "priority": "High"
+  },
+  {
+    "text": "Computer extremely slow after recent update",
+    "category": "Software",
+    "priority": "Medium"
+  },
+  {
+    "text": "Software installation requires admin privileges",
+    "category": "Software",
+    "priority": "Low"
+  },
+  {
+    "text": "Received suspicious phishing email from fake CEO",
+    "category": "Security",
+    "priority": "High"
+  },
+  {
+    "text": "Ransomware detected on workstation in accounting",
+    "category": "Security",
+    "priority": "Critical"
+  },
+  {
+    "text": "Multiple failed login attempts from unknown IP address",
+    "category": "Security",
+    "priority": "Critical"
+  },
+  {
+    "text": "Antivirus quarantined suspicious file from download",
+    "category": "Security",
+    "priority": "Medium"
+  },
+  {
+    "text": "Need to rotate service account credentials per policy",
+    "category": "Security",
+    "priority": "Medium"
+  },
+  {
+    "text": "Unauthorized access detected in audit logs",
+    "category": "Security",
+    "priority": "Critical"
+  },
+  {
+    "text": "SSL certificate expiring in 3 days for production site",
+    "category": "Security",
+    "priority": "High"
+  },
+  {
+    "text": "Data breach suspected customer data may be compromised",
+    "category": "Security",
+    "priority": "Critical"
+  },
+  {
+    "text": "Cannot log in password reset not working",
+    "category": "Access",
+    "priority": "High"
+  },
+  {
+    "text": "Need access to marketing shared drive folder",
+    "category": "Access",
+    "priority": "Low"
+  },
+  {
+    "text": "Account locked out after too many failed attempts",
+    "category": "Access",
+    "priority": "Medium"
+  },
+  {
+    "text": "MFA not working on new phone need reset",
+    "category": "Access",
+    "priority": "High"
+  },
+  {
+    "text": "SharePoint site returning 403 forbidden error",
+    "category": "Access",
+    "priority": "Medium"
+  },
+  {
+    "text": "New employee needs accounts for all company systems",
+    "category": "Access",
+    "priority": "Medium"
+  },
+  {
+    "text": "SSO not redirecting to correct login page",
+    "category": "Access",
+    "priority": "Medium"
+  },
+  {
+    "text": "VPN credentials expired need renewal",
+    "category": "Access",
+    "priority": "High"
+  }
+]
