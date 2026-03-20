@@ -1,8 +1,9 @@
-import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import React, { useState, useEffect, useCallback } from 'react';
+import { useNavigate, Link } from 'react-router-dom';
 import { useTickets } from '../context/TicketContext';
+import api from '../utils/api';
 import toast from 'react-hot-toast';
-import { Wand2, Send, AlertCircle, Lightbulb, ChevronDown, Users } from 'lucide-react';
+import { Wand2, Send, AlertCircle, Lightbulb, Users, BookOpen, ExternalLink } from 'lucide-react';
 import { PriorityBadge, CategoryBadge } from '../components/Badges';
 
 const CATEGORIES = ['network', 'software', 'hardware', 'authentication', 'email', 'database', 'security', 'hr', 'other'];
@@ -15,6 +16,8 @@ const CreateTicket = () => {
   const [loading, setLoading] = useState(false);
   const [classifying, setClassifying] = useState(false);
   const [aiResult, setAiResult] = useState(null);
+  const [kbSuggestions, setKbSuggestions] = useState([]);
+  const [kbConfirmed, setKbConfirmed] = useState(false);
 
   const [form, setForm] = useState({
     title: '', description: '', source: 'web',
@@ -22,6 +25,18 @@ const CreateTicket = () => {
   });
 
   const handleChange = (e) => setForm({ ...form, [e.target.name]: e.target.value });
+
+  const fetchKbSuggestions = useCallback(async (title, category) => {
+    if (!title || title.length < 3) { setKbSuggestions([]); return; }
+    try {
+      const params = { title };
+      if (category) params.category = category;
+      const { data } = await api.get('/kb/suggest', { params });
+      setKbSuggestions(data.data || []);
+    } catch {
+      // silently ignore
+    }
+  }, []);
 
   const handleAIClassify = async () => {
     if (!form.title || !form.description) {
@@ -49,12 +64,40 @@ const CreateTicket = () => {
     }
   }, [form.title, form.description]);
 
+  // Fetch KB suggestions whenever title or category changes
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setKbConfirmed(false);
+      fetchKbSuggestions(form.title, form.category);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [form.title, form.category, fetchKbSuggestions]);
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!form.title.trim() || !form.description.trim()) {
       toast.error('Title and description are required');
       return;
     }
+
+    // Gate: always check KB at submit time, regardless of kbConfirmed state
+    if (!kbConfirmed) {
+      try {
+        const params = { title: form.title };
+        if (form.category) params.category = form.category;
+        const { data } = await api.get('/kb/suggest', { params });
+        const fresh = data.data || [];
+        if (fresh.length > 0) {
+          setKbSuggestions(fresh);
+          setKbConfirmed(false);
+          toast.error('Please review the existing KB solutions before submitting', { duration: 5000 });
+          return; // hard block
+        }
+      } catch {
+        // if suggest fails, allow submit
+      }
+    }
+
     setLoading(true);
     try {
       const tags = form.tags ? form.tags.split(',').map(t => t.trim()).filter(Boolean) : [];
@@ -140,6 +183,46 @@ const CreateTicket = () => {
               </div>
             </div>
 
+            {/* KB blocker — shown inline in form when suggestions exist */}
+            {kbSuggestions.length > 0 && !kbConfirmed && (
+              <div className="rounded-xl border-2 border-amber-400 bg-amber-50 p-4">
+                <div className="flex items-center gap-2 mb-2">
+                  <BookOpen size={16} className="text-amber-600 shrink-0" />
+                  <p className="text-sm font-bold text-amber-800">Solution already exists in Knowledge Base!</p>
+                </div>
+                <p className="text-xs text-amber-700 mb-3">
+                  We found existing articles that may solve your issue. Please review them before submitting a new ticket.
+                </p>
+                <div className="space-y-2 mb-3">
+                  {kbSuggestions.slice(0, 3).map(a => (
+                    <Link key={a._id} to={`/kb/${a._id}`} target="_blank" rel="noopener noreferrer"
+                      className="flex items-center gap-2 p-2.5 bg-white border border-amber-300 hover:border-amber-500 rounded-lg transition-colors group">
+                      <BookOpen size={13} className="text-amber-500 shrink-0" />
+                      <div className="min-w-0 flex-1">
+                        <p className="text-xs font-semibold text-gray-800 group-hover:text-blue-600 transition-colors truncate">{a.title}</p>
+                        <p className="text-xs text-gray-400 capitalize">{a.category}</p>
+                      </div>
+                      <span className="text-xs font-semibold text-blue-600 bg-blue-50 border border-blue-100 px-2 py-0.5 rounded shrink-0">
+                        View Solution
+                      </span>
+                      <ExternalLink size={10} className="text-gray-300 shrink-0" />
+                    </Link>
+                  ))}
+                </div>
+                <label className="flex items-center gap-2 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={kbConfirmed}
+                    onChange={e => setKbConfirmed(e.target.checked)}
+                    className="rounded accent-amber-600 w-4 h-4"
+                  />
+                  <span className="text-xs font-semibold text-amber-800">
+                    I've checked the articles above and still need to submit a ticket
+                  </span>
+                </label>
+              </div>
+            )}
+
             <div className="flex gap-3 pt-2">
               <button
                 type="button" onClick={handleAIClassify} disabled={classifying}
@@ -151,8 +234,8 @@ const CreateTicket = () => {
                 }
                 AI Classify
               </button>
-              <button type="submit" disabled={loading}
-                className="flex-1 btn-primary flex items-center justify-center gap-2 text-sm">
+              <button type="submit" disabled={loading || (kbSuggestions.length > 0 && !kbConfirmed)}
+                className="flex-1 btn-primary flex items-center justify-center gap-2 text-sm disabled:opacity-50 disabled:cursor-not-allowed">
                 {loading
                   ? <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
                   : <><Send size={14} /> Submit Ticket</>
@@ -164,6 +247,16 @@ const CreateTicket = () => {
 
         {/* Sidebar info */}
         <div className="space-y-4">
+          {/* KB Suggestions — sidebar copy (collapsed once confirmed) */}
+          {kbSuggestions.length > 0 && !kbConfirmed && (
+            <div className="card border-l-4 border-amber-400 bg-amber-50 fade-in">
+              <div className="flex items-center gap-2 mb-2">
+                <BookOpen size={15} className="text-amber-600" />
+                <h4 className="text-sm font-semibold text-amber-800">Solutions Found</h4>
+              </div>
+              <p className="text-xs text-amber-700">Check the form for existing KB articles before submitting.</p>
+            </div>
+          )}
           {/* AI Result */}
           {aiResult && (
             <div className="card border-l-4 border-blue-500 fade-in">

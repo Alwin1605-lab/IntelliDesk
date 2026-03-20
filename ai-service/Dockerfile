@@ -2,28 +2,30 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install system deps
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
-
-# Copy requirements first for cache
+# Python deps — all packages have manylinux wheels, no compiler needed.
+# No apt-get required; avoids flaky Debian mirror issues.
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --timeout=120 --retries=5 -r requirements.txt
 
 # Copy application code
-COPY . .
+COPY train.py app.py ./
 
-# Download NLTK data (optional, not required)
-RUN python -c "import nltk; nltk.download('stopwords', quiet=True)" 2>/dev/null || true
+# Bake pre-trained models into the image under a seed directory.
+# At runtime, entrypoint.sh copies them into /app/models (the volume mount)
+# only if the volume is empty — so re-deploys reuse the persisted volume.
+COPY models/ ./models_seed/
 
-# Pre-train models at build time (dataset mounted via volume or copied)
-# Models are trained on first startup if not present
+# Entrypoint that seeds the volume on first start
+COPY entrypoint.sh ./entrypoint.sh
+RUN chmod +x ./entrypoint.sh
+
+# /app/models is where the app reads models from (may be a Docker volume)
+RUN mkdir -p /app/models
 
 EXPOSE 3001
 
 ENV PYTHONUNBUFFERED=1
 ENV PORT=3001
+ENV DATASET_PATH=/app/dataset
 
-CMD ["python", "app.py"]
+ENTRYPOINT ["./entrypoint.sh"]

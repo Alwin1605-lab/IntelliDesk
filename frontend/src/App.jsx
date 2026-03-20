@@ -13,6 +13,7 @@ import TicketList from './pages/TicketList';
 import Analytics from './pages/Analytics';
 import AdminPanel from './pages/AdminPanel';
 import KnowledgeBase from './pages/KnowledgeBase';
+import KnowledgeBaseDetail from './pages/KnowledgeBaseDetail';
 import Layout from './components/Layout';
 
 const PrivateRoute = ({ children, roles }) => {
@@ -49,6 +50,7 @@ const AppRoutes = () => {
         <Route path="tickets/new" element={<CreateTicket />} />
         <Route path="tickets/:id" element={<TicketDetail />} />
         <Route path="kb" element={<KnowledgeBase />} />
+        <Route path="kb/:id" element={<KnowledgeBaseDetail />} />
         <Route path="analytics" element={
           <PrivateRoute roles={['admin', 'technician']}>
             <Analytics />

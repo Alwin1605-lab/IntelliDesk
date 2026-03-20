@@ -9,11 +9,20 @@ const historySchema = new mongoose.Schema({
   timestamp: { type: Date, default: Date.now },
 });
 
+const attachmentSchema = new mongoose.Schema({
+  filename:     { type: String, required: true },
+  originalName: { type: String, required: true },
+  mimetype:     { type: String, required: true },
+  size:         { type: Number, required: true },
+  url:          { type: String, required: true },
+});
+
 const commentSchema = new mongoose.Schema({
-  text: { type: String, required: true },
-  author: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
-  isInternal: { type: Boolean, default: false },
-  createdAt: { type: Date, default: Date.now },
+  text:        { type: String, default: '' },
+  author:      { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  isInternal:  { type: Boolean, default: false },
+  attachments: [attachmentSchema],
+  createdAt:   { type: Date, default: Date.now },
 });
 
 const ticketSchema = new mongoose.Schema({
@@ -62,6 +71,9 @@ const ticketSchema = new mongoose.Schema({
   // Timestamps
   firstResponseAt: Date,
   resolvedAt: Date,
+
+  // Resolution
+  resolution: { type: String, default: '' },
 
   // Feedback
   rating: { type: Number, min: 1, max: 5 },

@@ -1,5 +1,6 @@
 require('dotenv').config();
 const express = require('express');
+const path = require('path');
 const mongoose = require('mongoose');
 const cors = require('cors');
 const helmet = require('helmet');
@@ -22,6 +23,9 @@ app.use(helmet({ contentSecurityPolicy: false }));
 app.use(cors({ origin: process.env.CLIENT_URL || '*', credentials: true }));
 app.use(express.json({ limit: '10mb' }));
 app.use(morgan('dev'));
+
+// Serve uploaded files
+app.use('/api/uploads', express.static(path.join(__dirname, '../uploads')));
 
 // Health check
 app.get('/api/health', (req, res) => res.json({ status: 'ok', uptime: process.uptime() }));
@@ -57,6 +61,18 @@ mongoose.connect(process.env.MONGO_URI || 'mongodb://localhost:27017/helpdesk_db
         await require('./jobs/slaChecker').checkSLABreaches(io);
       } catch (e) { console.error('SLA check error:', e.message); }
     });
+
+    // Email → Auto Ticket cron — every 60 seconds (only if credentials are set)
+    if (process.env.EMAIL_USER && !process.env.EMAIL_USER.startsWith('your_')) {
+      cron.schedule('* * * * *', async () => {
+        try {
+          await require('./jobs/emailPoller').pollEmails(io);
+        } catch (e) { console.error('Email poll error:', e.message); }
+      });
+      console.log('Email poller started (checking inbox every 60s)');
+    } else {
+      console.log('Email poller disabled — set EMAIL_USER and EMAIL_PASS in .env to enable');
+    }
 
     const PORT = process.env.PORT || 5000;
     server.listen(PORT, () => console.log(`Server running on port ${PORT}`));

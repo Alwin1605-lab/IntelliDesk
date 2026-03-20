@@ -1,79 +1,290 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { X, Send, Bot, User, PlusCircle } from 'lucide-react';
+import { X, Send, Bot, User, PlusCircle, CheckCircle, ExternalLink, BookOpen } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import api from '../utils/api';
+import { useTickets } from '../context/TicketContext';
 import { v4 as uuidv4 } from 'uuid';
 
 const sessionId = uuidv4();
 
+// Phrases that mean the user wants to raise a ticket
+const TICKET_TRIGGERS = [
+  'raise a ticket', 'create a ticket', 'open a ticket', 'submit a ticket',
+  'log a ticket', 'raise ticket', 'create ticket', 'open ticket', 'submit ticket',
+  'log ticket', 'make a ticket', 'file a ticket',
+];
+
+const wantsTicket = (text) =>
+  TICKET_TRIGGERS.some((t) => text.toLowerCase().includes(t));
+
 const ChatBot = ({ onClose }) => {
   const navigate = useNavigate();
+  const { createTicket, classifyTicket } = useTickets();
+
   const [messages, setMessages] = useState([
     {
       role: 'bot',
-      text: "👋 Hello! I'm your POWERGRID IT Support Assistant.\n\nI can help with:\n• Password reset\n• VPN access issues\n• WiFi problems\n• Email issues\n• Or raise a support ticket\n\nWhat's your issue today?",
-      time: new Date()
-    }
+      text: "👋 Hello! I'm your POWERGRID IT Support Assistant, powered by AI.\n\nI can help troubleshoot any IT issue — just describe your problem in plain English and I'll guide you through it. I can also raise a support ticket on your behalf if needed.\n\nWhat's going on?",
+      time: new Date(),
+    },
   ]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [suggestTicket, setSuggestTicket] = useState(false);
+
+  // Guided ticket creation state machine
+  // ticketFlow: null | 'awaiting_title' | 'awaiting_kb_confirm' | 'awaiting_description'
+  const [ticketFlow, setTicketFlow] = useState(null);
+  const [ticketDraft, setTicketDraft] = useState({ title: '', description: '' });
+  const [kbHits, setKbHits] = useState([]);
+
   const bottomRef = useRef(null);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  const sendMessage = async (text = input.trim()) => {
-    if (!text || loading) return;
-    setInput('');
+  const addBotMessage = (text, extra = {}) => {
+    setMessages((prev) => [...prev, { role: 'bot', text, time: new Date(), ...extra }]);
+  };
 
-    // Add user message
+  const addUserMessage = (text) => {
     setMessages((prev) => [...prev, { role: 'user', text, time: new Date() }]);
-    setLoading(true);
+  };
 
+  // ── Ticket creation flow ─────────────────────────────────────────────────
+  const startTicketFlow = () => {
+    setTicketFlow('awaiting_title');
+    setTicketDraft({ title: '', description: '' });
+    setSuggestTicket(false);
+    addBotMessage('Sure! Please enter a **title** for your ticket — a short summary of the issue (e.g. "VPN not connecting after Windows update").');
+  };
+
+  const handleTicketFlowInput = async (text) => {
+    if (ticketFlow === 'awaiting_title') {
+      const title = text.trim();
+      setTicketDraft((d) => ({ ...d, title }));
+
+      // Check KB before asking for description
+      setLoading(true);
+      try {
+        const { data } = await api.get('/kb/suggest', { params: { title } });
+        const articles = data.data || [];
+        setLoading(false);
+
+        if (articles.length > 0) {
+          setKbHits(articles);
+          setTicketFlow('awaiting_kb_confirm');
+          addBotMessage(
+            `Before I raise a ticket, I found ${articles.length} existing Knowledge Base article${articles.length > 1 ? 's' : ''} that may already solve your issue:`,
+            { kbArticles: articles }
+          );
+          addBotMessage(
+            `If these don't help, type **yes** to continue raising a ticket anyway, or **no** to cancel.`
+          );
+        } else {
+          setTicketFlow('awaiting_description');
+          addBotMessage(`Got it. Now please describe the issue in more detail — what exactly is happening, when did it start, and what have you tried so far?`);
+        }
+      } catch {
+        setLoading(false);
+        // On error, proceed normally
+        setTicketFlow('awaiting_description');
+        addBotMessage(`Got it. Now please describe the issue in more detail — what exactly is happening, when did it start, and what have you tried so far?`);
+      }
+      return;
+    }
+
+    if (ticketFlow === 'awaiting_kb_confirm') {
+      const answer = text.trim().toLowerCase();
+      if (answer === 'yes' || answer === 'y') {
+        setKbHits([]);
+        setTicketFlow('awaiting_description');
+        addBotMessage(`Understood. Please describe the issue in more detail — what exactly is happening, when did it start, and what have you tried so far?`);
+      } else {
+        setKbHits([]);
+        setTicketFlow(null);
+        addBotMessage(`No problem! Please review the Knowledge Base articles above. If you still need help, just say "raise a ticket" and I'll assist you.`);
+      }
+      return;
+    }
+
+    if (ticketFlow === 'awaiting_description') {
+      const description = text.trim();
+      const { title } = ticketDraft;
+      setTicketFlow(null);
+      setLoading(true);
+
+      try {
+        // Final KB check at submission time (same as the form gate)
+        try {
+          const { data } = await api.get('/kb/suggest', { params: { title } });
+          const fresh = data.data || [];
+          if (fresh.length > 0 && kbHits.length === 0) {
+            // KB articles appeared since we last checked — surface them
+            setKbHits(fresh);
+            setTicketDraft((d) => ({ ...d, description }));
+            setTicketFlow('awaiting_kb_confirm');
+            setLoading(false);
+            addBotMessage(
+              `Hold on — I just found some KB articles that match your issue:`,
+              { kbArticles: fresh }
+            );
+            addBotMessage(`Type **yes** to submit the ticket anyway, or **no** to cancel.`);
+            return;
+          }
+        } catch { /* allow submit if check fails */ }
+
+        // Classify using the existing AI classify module
+        let category = 'other';
+        let priority = 'medium';
+        try {
+          const classification = await classifyTicket(title, description);
+          category = classification.category || 'other';
+          priority = classification.priority || 'medium';
+        } catch (_) { /* fallback to defaults */ }
+
+        const ticket = await createTicket({
+          title,
+          description,
+          category,
+          priority,
+          source: 'chatbot',
+        });
+
+        setKbHits([]);
+        addBotMessage(
+          `Your ticket has been created and our team has been notified.`,
+          { createdTicket: ticket }
+        );
+      } catch (err) {
+        addBotMessage('⚠️ Sorry, I couldn\'t create the ticket. Please try again or use the ticket form directly.');
+      } finally {
+        setLoading(false);
+      }
+    }
+  };
+
+  // ── Normal LLM message ───────────────────────────────────────────────────
+  const sendLLMMessage = async (text) => {
+    setLoading(true);
     try {
-      const { data } = await api.post('/chatbot/message', { message: text, sessionId });
+      const history = messages
+        .filter((m) => m.role === 'user' || (m.role === 'bot' && messages.indexOf(m) > 0))
+        .map((m) => ({ role: m.role, text: m.text }));
+
+      const { data } = await api.post('/chatbot/message', { message: text, sessionId, history });
       const botData = data.data;
 
-      setMessages((prev) => [
-        ...prev,
-        {
-          role: 'bot',
-          text: botData.response,
-          kbArticles: botData.kbArticles,
-          time: new Date()
-        }
-      ]);
+      addBotMessage(botData.response, { kbArticles: botData.kbArticles });
 
       if (botData.suggestTicketCreation) setSuggestTicket(true);
     } catch {
-      setMessages((prev) => [
-        ...prev,
-        { role: 'bot', text: '⚠️ Sorry, I encountered an error. Please try again or raise a ticket directly.', time: new Date() }
-      ]);
+      addBotMessage('⚠️ Sorry, I encountered an error. Please try again or raise a ticket directly.');
     } finally {
       setLoading(false);
     }
   };
 
+  // ── Main send handler ────────────────────────────────────────────────────
+  const sendMessage = async (text = input.trim()) => {
+    if (!text || loading) return;
+    setInput('');
+    addUserMessage(text);
+
+    // If we're in the guided ticket flow, handle it
+    if (ticketFlow) {
+      await handleTicketFlowInput(text);
+      return;
+    }
+
+    // If user explicitly asks to raise a ticket, start the guided flow
+    if (wantsTicket(text)) {
+      startTicketFlow();
+      return;
+    }
+
+    // Otherwise send to LLM
+    await sendLLMMessage(text);
+  };
+
   const quickReplies = ['Password reset', 'VPN access', 'WiFi not working', 'Email issue', 'Raise a ticket'];
 
-  const formatText = (text) =>
-    text.split('\n').map((line, i) => (
-      <span key={i}>
-        {line.startsWith('**') && line.endsWith('**') ? (
-          <strong>{line.slice(2, -2)}</strong>
-        ) : (
-          line
-        )}
-        <br />
-      </span>
-    ));
+  // ── Markdown renderer ────────────────────────────────────────────────────
+  const renderInline = (text) => {
+    const parts = text.split(/(\*\*[^*]+\*\*|`[^`]+`)/g);
+    return parts.map((part, i) => {
+      if (part.startsWith('**') && part.endsWith('**'))
+        return <strong key={i} className="font-semibold text-gray-900">{part.slice(2, -2)}</strong>;
+      if (part.startsWith('`') && part.endsWith('`'))
+        return <code key={i} className="bg-gray-100 text-blue-700 rounded px-1 text-[10px] font-mono">{part.slice(1, -1)}</code>;
+      return part;
+    });
+  };
 
+  const formatText = (text) => {
+    const blocks = text.split(/\n{2,}/);
+    return blocks.map((block, bi) => {
+      const lines = block.split('\n');
+
+      if (lines.every((l) => /^\d+\.\s/.test(l.trim()) || l.trim() === '')) {
+        const items = lines.filter((l) => /^\d+\.\s/.test(l.trim()));
+        return (
+          <ol key={bi} className="list-decimal list-inside space-y-1 my-1">
+            {items.map((item, ii) => (
+              <li key={ii} className="leading-snug">{renderInline(item.replace(/^\d+\.\s/, ''))}</li>
+            ))}
+          </ol>
+        );
+      }
+
+      if (lines.every((l) => /^[•\-*]\s/.test(l.trim()) || l.trim() === '')) {
+        const items = lines.filter((l) => /^[•\-*]\s/.test(l.trim()));
+        return (
+          <ul key={bi} className="list-disc list-inside space-y-1 my-1">
+            {items.map((item, ii) => (
+              <li key={ii} className="leading-snug">{renderInline(item.replace(/^[•\-*]\s/, ''))}</li>
+            ))}
+          </ul>
+        );
+      }
+
+      return (
+        <p key={bi} className="leading-relaxed mb-1">
+          {lines.map((line, li) => {
+            const trimmed = line.trim();
+            if (/^\d+\.\s/.test(trimmed))
+              return (
+                <span key={li} className="block pl-2">
+                  <span className="font-semibold text-blue-700">{trimmed.match(/^\d+/)[0]}.</span>{' '}
+                  {renderInline(trimmed.replace(/^\d+\.\s/, ''))}
+                </span>
+              );
+            if (/^[•\-*]\s/.test(trimmed))
+              return (
+                <span key={li} className="block pl-2">
+                  <span className="text-blue-500 mr-1">›</span>
+                  {renderInline(trimmed.replace(/^[•\-*]\s/, ''))}
+                </span>
+              );
+            return (
+              <span key={li}>
+                {renderInline(line)}
+                {li < lines.length - 1 && <br />}
+              </span>
+            );
+          })}
+        </p>
+      );
+    });
+  };
+
+  // ── Render ───────────────────────────────────────────────────────────────
   return (
-    <div className="fixed bottom-24 right-6 w-80 md:w-96 bg-white rounded-2xl shadow-2xl border border-gray-200 z-50 flex flex-col fade-in overflow-hidden"
-         style={{ maxHeight: '520px' }}>
+    <div
+      className="fixed bottom-24 right-6 w-80 md:w-96 bg-white rounded-2xl shadow-2xl border border-gray-200 z-50 flex flex-col fade-in overflow-hidden"
+      style={{ maxHeight: '520px' }}
+    >
       {/* Header */}
       <div className="bg-gradient-to-r from-blue-600 to-blue-700 px-4 py-3 flex items-center justify-between">
         <div className="flex items-center gap-2.5">
@@ -105,14 +316,40 @@ const ChatBot = ({ onClose }) => {
                 ? 'bg-white border border-gray-100 text-gray-700 shadow-sm'
                 : 'bg-blue-600 text-white'
             }`}>
-              {formatText(msg.text)}
+              {msg.text && formatText(msg.text)}
+
+              {/* Ticket created confirmation card */}
+              {msg.createdTicket && (
+                <div className="mt-2 pt-2 border-t border-green-100 bg-green-50 rounded-lg px-2 py-1.5">
+                  <div className="flex items-center gap-1.5 mb-1">
+                    <CheckCircle size={12} className="text-green-600 shrink-0" />
+                    <span className="text-green-700 font-semibold text-[11px]">Ticket created successfully!</span>
+                  </div>
+                  <p className="text-gray-600 text-[10px] mb-0.5">
+                    <span className="font-mono bg-gray-100 px-1 rounded">{msg.createdTicket.ticketId}</span>
+                    {' · '}
+                    <span className="capitalize">{msg.createdTicket.priority}</span> priority
+                    {' · '}
+                    <span className="capitalize">{msg.createdTicket.category}</span>
+                  </p>
+                  <p className="text-gray-700 text-[10px] font-medium truncate mb-1">{msg.createdTicket.title}</p>
+                  <button
+                    onClick={() => { navigate(`/tickets/${msg.createdTicket._id}`); onClose(); }}
+                    className="flex items-center gap-1 text-blue-600 text-[10px] font-medium hover:underline"
+                  >
+                    <ExternalLink size={10} />
+                    View ticket
+                  </button>
+                </div>
+              )}
+
               {msg.kbArticles?.length > 0 && (
                 <div className="mt-2 pt-2 border-t border-gray-100">
-                  <p className="text-gray-400 mb-1">📚 Related articles:</p>
+                  <p className="text-gray-400 mb-1 flex items-center gap-1"><BookOpen size={11} /> Related KB articles:</p>
                   {msg.kbArticles.map((a) => (
                     <button
                       key={a._id}
-                      onClick={() => navigate('/kb')}
+                      onClick={() => { navigate(`/kb/${a._id}`); onClose(); }}
                       className="block text-blue-500 hover:underline text-left w-full"
                     >
                       → {a.title}
@@ -141,31 +378,33 @@ const ChatBot = ({ onClose }) => {
         <div ref={bottomRef} />
       </div>
 
-      {/* Suggest ticket */}
-      {suggestTicket && (
+      {/* Suggest ticket banner — shown only when not already in ticket flow */}
+      {suggestTicket && !ticketFlow && (
         <div className="px-4 py-2 bg-blue-50 border-t border-blue-100">
           <button
-            onClick={() => { navigate('/tickets/new'); onClose(); }}
+            onClick={startTicketFlow}
             className="flex items-center gap-2 text-blue-600 text-xs font-medium hover:underline"
           >
             <PlusCircle size={13} />
-            Create a support ticket for this issue →
+            Raise a support ticket for this issue →
           </button>
         </div>
       )}
 
-      {/* Quick replies */}
-      <div className="px-3 py-2 flex gap-1.5 overflow-x-auto border-t border-gray-100">
-        {quickReplies.map((q) => (
-          <button
-            key={q}
-            onClick={() => sendMessage(q)}
-            className="shrink-0 text-xs bg-gray-100 hover:bg-blue-50 hover:text-blue-600 text-gray-600 px-2.5 py-1 rounded-full transition-colors"
-          >
-            {q}
-          </button>
-        ))}
-      </div>
+      {/* Quick replies — hidden during ticket flow to avoid confusion */}
+      {!ticketFlow && (
+        <div className="px-3 py-2 flex gap-1.5 overflow-x-auto border-t border-gray-100">
+          {quickReplies.map((q) => (
+            <button
+              key={q}
+              onClick={() => sendMessage(q)}
+              className="shrink-0 text-xs bg-gray-100 hover:bg-blue-50 hover:text-blue-600 text-gray-600 px-2.5 py-1 rounded-full transition-colors"
+            >
+              {q}
+            </button>
+          ))}
+        </div>
+      )}
 
       {/* Input */}
       <div className="p-3 border-t border-gray-100 flex gap-2">
@@ -173,7 +412,12 @@ const ChatBot = ({ onClose }) => {
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && sendMessage()}
-          placeholder="Type your issue..."
+          placeholder={
+            ticketFlow === 'awaiting_title' ? 'Enter ticket title...' :
+            ticketFlow === 'awaiting_kb_confirm' ? 'Type yes to continue, no to cancel...' :
+            ticketFlow === 'awaiting_description' ? 'Describe the issue...' :
+            'Type your issue...'
+          }
           className="flex-1 text-sm border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
           disabled={loading}
         />

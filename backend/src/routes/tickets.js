@@ -1,4 +1,7 @@
 const express = require('express');
+const path = require('path');
+const fs = require('fs');
+const multer = require('multer');
 const Ticket = require('../models/Ticket');
 const User = require('../models/User');
 const KnowledgeBase = require('../models/KnowledgeBase');
@@ -6,6 +9,30 @@ const { protect, authorize } = require('../middleware/auth');
 const { classifyTicket, findSimilarTickets } = require('../utils/aiService');
 
 const router = express.Router();
+
+// ─── File upload setup ───
+const UPLOAD_DIR = path.join(__dirname, '../../uploads');
+if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => cb(null, UPLOAD_DIR),
+  filename:    (req, file, cb) => {
+    const unique = `${Date.now()}-${Math.round(Math.random() * 1e6)}`;
+    const ext = path.extname(file.originalname);
+    cb(null, `${unique}${ext}`);
+  },
+});
+
+const upload = multer({
+  storage,
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10 MB per file
+  fileFilter: (req, file, cb) => {
+    // Allow images, PDFs, Office docs, text, zip
+    const allowed = /\.(jpe?g|png|gif|webp|svg|pdf|docx?|xlsx?|pptx?|txt|csv|zip|log)$/i;
+    if (allowed.test(path.extname(file.originalname))) return cb(null, true);
+    cb(new Error(`File type not allowed: ${file.originalname}`));
+  },
+});
 
 // ─── Helper: auto-assign to least busy technician ───
 async function autoAssignTechnician(category) {
@@ -181,7 +208,7 @@ router.put('/:id', protect, async (req, res) => {
     const ticket = await Ticket.findById(req.params.id);
     if (!ticket) return res.status(404).json({ message: 'Ticket not found' });
 
-    const { status, priority, assignedTo, category, title, description } = req.body;
+    const { status, priority, assignedTo, category, title, description, resolution } = req.body;
     const history = [];
 
     if (status && status !== ticket.status) {
@@ -191,15 +218,35 @@ router.put('/:id', protect, async (req, res) => {
         ticket.resolvedAt = new Date();
         // Update technician stats
         if (ticket.assignedTo) {
-          const resTime = (new Date() - ticket.createdAt) / 3600000; // hours
           await User.findByIdAndUpdate(ticket.assignedTo, {
             $inc: { activeTickets: -1, totalResolved: 1 },
           });
         }
+        // Auto-create KB article on resolve if resolution text provided
+        const resolutionText = resolution !== undefined ? resolution : ticket.resolution;
+        if (resolutionText && resolutionText.trim()) {
+          const existingKb = await KnowledgeBase.findOne({ sourceTicket: ticket._id });
+          if (!existingKb) {
+            let content = resolutionText.trim();
+            if (ticket.aiSuggestions?.length) {
+              content += '\n\nRecommended Steps:\n' + ticket.aiSuggestions.map((s, i) => `${i + 1}. ${s}`).join('\n');
+            }
+            const kbArticle = await KnowledgeBase.create({
+              title: ticket.title,
+              content,
+              category: ticket.category,
+              tags: ticket.tags || [],
+              createdBy: req.user._id,
+              sourceTicket: ticket._id,
+              affectedCount: 1,
+              isPublished: true,
+            });
+            if (!ticket.relatedArticles) ticket.relatedArticles = [];
+            ticket.relatedArticles.push(kbArticle._id);
+          }
+        }
       }
-    }
-
-    if (priority && priority !== ticket.priority) {
+    }    if (priority && priority !== ticket.priority) {
       history.push({ action: 'priority_changed', oldValue: ticket.priority, newValue: priority, changedBy: req.user._id });
       ticket.priority = priority;
       const slaMap = { critical: 1, high: 4, medium: 24, low: 72 };
@@ -227,6 +274,7 @@ router.put('/:id', protect, async (req, res) => {
 
     if (title) ticket.title = title;
     if (description) ticket.description = description;
+    if (resolution !== undefined) ticket.resolution = resolution;
 
     ticket.history.push(...history);
     await ticket.save();
@@ -257,14 +305,32 @@ router.delete('/:id', protect, authorize('admin'), async (req, res) => {
   }
 });
 
-// POST /api/tickets/:id/comments
-router.post('/:id/comments', protect, async (req, res) => {
+// POST /api/tickets/:id/comments  (multipart/form-data, up to 5 files)
+router.post('/:id/comments', protect, upload.array('files', 5), async (req, res) => {
   try {
     const { text, isInternal } = req.body;
+    if (!text?.trim() && (!req.files || req.files.length === 0)) {
+      return res.status(400).json({ message: 'Comment must have text or at least one attachment' });
+    }
+
     const ticket = await Ticket.findById(req.params.id);
     if (!ticket) return res.status(404).json({ message: 'Ticket not found' });
 
-    ticket.comments.push({ text, author: req.user._id, isInternal: !!isInternal });
+    const attachments = (req.files || []).map(f => ({
+      filename:     f.filename,
+      originalName: f.originalname,
+      mimetype:     f.mimetype,
+      size:         f.size,
+      url:          `/api/uploads/${f.filename}`,
+    }));
+
+    ticket.comments.push({
+      text:        text?.trim() || '',
+      author:      req.user._id,
+      isInternal:  !!isInternal,
+      attachments,
+    });
+
     if (!ticket.firstResponseAt && req.user.role !== 'user') {
       ticket.firstResponseAt = new Date();
     }

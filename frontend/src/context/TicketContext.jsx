@@ -1,4 +1,5 @@
-import React, { createContext, useContext, useState, useCallback } from 'react';
+import React, { createContext, useContext, useState, useCallback, useEffect, useRef } from 'react';
+import { io as socketIO } from 'socket.io-client';
 import api from '../utils/api';
 import toast from 'react-hot-toast';
 
@@ -8,6 +9,7 @@ export const TicketProvider = ({ children }) => {
   const [tickets, setTickets] = useState([]);
   const [loading, setLoading] = useState(false);
   const [pagination, setPagination] = useState({ page: 1, total: 0, pages: 0 });
+  const socketRef = useRef(null);
 
   const fetchTickets = useCallback(async (params = {}) => {
     setLoading(true);
@@ -45,6 +47,36 @@ export const TicketProvider = ({ children }) => {
   const classifyTicket = useCallback(async (title, description) => {
     const { data } = await api.post('/tickets/classify', { title, description });
     return data.data;
+  }, []);
+
+  // ── Socket.IO real-time updates ──────────────────────────────────────────
+  useEffect(() => {
+    const SOCKET_URL = process.env.REACT_APP_SOCKET_URL ||
+      (process.env.REACT_APP_API_URL
+        ? process.env.REACT_APP_API_URL.replace('/api', '')
+        : window.location.origin);
+
+    const socket = socketIO(SOCKET_URL, { transports: ['websocket', 'polling'] });
+    socketRef.current = socket;
+
+    socket.on('ticket:created', (ticket) => {
+      setTickets((prev) => {
+        // Avoid duplicates (e.g. if current user just created it via web)
+        if (prev.some((t) => t._id === ticket._id)) return prev;
+        return [ticket, ...prev];
+      });
+      if (ticket.source === 'email') {
+        toast.success(`New ticket ${ticket.ticketId} received via email`);
+      }
+    });
+
+    socket.on('ticket:updated', (ticket) => {
+      setTickets((prev) => prev.map((t) => (t._id === ticket._id ? ticket : t)));
+    });
+
+    return () => {
+      socket.disconnect();
+    };
   }, []);
 
   return (

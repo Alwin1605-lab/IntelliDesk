@@ -425,18 +425,113 @@ def sla_prediction():
 
 @app.route("/chatbot", methods=["POST"])
 def chatbot():
-    """MODULE ADVANCED: Chatbot response with AI classification."""
-    body = request.get_json(force=True)
-    message = body.get("message", "")
+    """
+    LLM-powered chatbot with Groq (llama3-8b-8192).
+    Falls back to rule-based if GROQ_API_KEY is not set or the API fails.
 
-    if not message.strip():
+    Request body:
+      {
+        "message": str,                       # latest user message
+        "history": [{"role": "user"|"assistant", "content": str}, ...],
+        "kbContext": str                       # optional: pre-fetched KB snippets
+      }
+    """
+    import os as _os
+
+    body = request.get_json(force=True)
+    message = body.get("message", "").strip()
+    history = body.get("history", [])  # list of {role, content}
+    kb_context = body.get("kbContext", "")
+
+    if not message:
         return jsonify(
             {"response": "Please describe your issue.", "suggestTicket": False}
         )
 
+    # ── Classify so we always return category / suggestions ──────────────────
+    category, cat_conf, _ = predict_category(message)
+    category, cat_conf = rule_based_category_boost(message, category, cat_conf)
+    suggestions = AI_SUGGESTIONS.get(category, AI_SUGGESTIONS["other"])
+    similar = get_similar_tickets(message, top_k=3)
+
+    groq_key = _os.environ.get("GROQ_API_KEY", "").strip()
+
+    if groq_key:
+        try:
+            from groq import Groq as _Groq
+
+            client = _Groq(api_key=groq_key)
+
+            system_prompt = (
+                "You are an expert IT helpdesk assistant for POWERGRID, an electricity "
+                "transmission company. You help employees resolve IT issues quickly and "
+                "professionally.\n\n"
+                "Guidelines:\n"
+                "- Give concise, actionable troubleshooting steps (numbered when listing steps)\n"
+                "- Be friendly but professional\n"
+                "- If you cannot resolve the issue in 2-3 steps, suggest that the user raise "
+                "  a support ticket via the helpdesk\n"
+                "- Never make up information; if unsure, recommend contacting IT helpdesk\n"
+                "- Keep responses under 200 words unless the user explicitly asks for more detail\n"
+                "- Do NOT create or invent ticket titles or descriptions yourself\n"
+            )
+
+            if kb_context:
+                system_prompt += (
+                    f"\n\nRelevant knowledge base articles for context:\n{kb_context}\n"
+                    "Use the above articles to give accurate answers when relevant."
+                )
+
+            # Build messages list: system + trimmed history (last 10 turns) + new user msg
+            messages = [{"role": "system", "content": system_prompt}]
+            # Keep last 10 history messages to stay within token limits
+            for h in history[-10:]:
+                r = h.get("role", "")
+                if r in ("user", "assistant"):
+                    messages.append({"role": r, "content": h.get("content", "")})
+            messages.append({"role": "user", "content": message})
+
+            completion = client.chat.completions.create(
+                model="llama-3.1-8b-instant",
+                messages=messages,
+                temperature=0.4,
+                max_tokens=400,
+            )
+
+            response_text = completion.choices[0].message.content.strip()
+
+            # Heuristic: suggest ticket if LLM response mentions creating/raising a ticket
+            suggest = cat_conf > 0.35 or any(
+                kw in response_text.lower()
+                for kw in [
+                    "raise a ticket",
+                    "create a ticket",
+                    "support ticket",
+                    "submit a ticket",
+                ]
+            )
+
+            return jsonify(
+                {
+                    "response": response_text,
+                    "category": category,
+                    "confidence": round(cat_conf, 3),
+                    "suggestions": suggestions,
+                    "similarTickets": similar,
+                    "suggestTicket": suggest,
+                    "model": "groq/llama-3.1-8b-instant",
+                }
+            )
+
+        except Exception as e:
+            logger.warning(
+                f"[Chatbot] Groq API error — falling back to rule-based: {e}"
+            )
+            # Fall through to rule-based below
+
+    # ── Rule-based fallback (no key or API error) ────────────────────────────
     text_lower = message.lower()
 
-    # Greetings
     if any(g in text_lower for g in ["hello", "hi", "hey", "greetings"]):
         return jsonify(
             {
@@ -445,31 +540,32 @@ def chatbot():
             }
         )
 
-    # Password reset
     if "password" in text_lower and any(
-        w in text_lower for w in ["reset", "forgot", "change", "expired"]
+        w in text_lower for w in ["reset", "forgot", "change", "expired", "locked"]
     ):
         return jsonify(
             {
-                "response": "For password reset:\n1. Go to login page and click 'Forgot Password'\n2. Enter your email address\n3. Check your email for reset link\n4. If account is locked, contact IT helpdesk\n\nWould you like me to create a ticket for this?",
+                "response": (
+                    "For password reset:\n"
+                    "1. Go to the login page and click 'Forgot Password'\n"
+                    "2. Enter your registered email address\n"
+                    "3. Check your inbox for the reset link\n"
+                    "4. If your account is locked, contact IT helpdesk directly.\n\n"
+                    "Would you like me to create a support ticket for this?"
+                ),
                 "category": "authentication",
+                "confidence": 0.9,
+                "suggestions": suggestions,
                 "suggestTicket": False,
             }
         )
 
-    # Classify the message
-    category, cat_conf, _ = predict_category(message)
-    category, cat_conf = rule_based_category_boost(message, category, cat_conf)
-    suggestions = AI_SUGGESTIONS.get(category, AI_SUGGESTIONS["other"])
-
     response = (
-        f"I understand you're having a {category} issue. Here are some quick steps:\n\n"
+        f"I understand you're having a **{category}** issue. Here are some steps:\n\n"
     )
     for i, step in enumerate(suggestions[:4], 1):
         response += f"{i}. {step}\n"
-    response += (
-        "\nIf these steps don't resolve your issue, I can create a support ticket."
-    )
+    response += "\nIf these steps don't resolve your issue, I can create a support ticket for you."
 
     return jsonify(
         {
@@ -478,7 +574,132 @@ def chatbot():
             "confidence": round(cat_conf, 3),
             "suggestions": suggestions,
             "suggestTicket": cat_conf > 0.3,
+            "model": "rule-based",
         }
+    )
+
+
+@app.route("/spam-check", methods=["POST"])
+def spam_check():
+    """
+    Spam classifier for inbound emails.
+    Uses Groq LLM when available; falls back to rule-based heuristics.
+
+    Request body:
+      { "subject": str, "body": str }
+
+    Response:
+      { "spam": bool, "reason": str, "method": "groq"|"heuristic" }
+    """
+    import os as _os
+
+    data = request.get_json(force=True)
+    subject = (data.get("subject") or "").strip()
+    body = (data.get("body") or "").strip()[:600]  # cap tokens
+
+    # ── Layer 1: fast heuristic pre-filter ───────────────────────────────────
+    combined = f"{subject} {body}".lower()
+
+    SPAM_SUBJECT_RE = re.compile(
+        r"(sale|special offer|congratulat|you('ve| have) won|you are selected|"
+        r"unsubscribe|newsletter|coupon|discount|buy now|click here|free trial|"
+        r"limited time|act now|verify your (account|email)|dear (customer|user|friend)|"
+        r"earn money|make money|work from home|weight loss|casino|lottery|"
+        r"enlarge|pharmacy|cheap meds|refinance|mortgage offer|crypto|investment opportunity)",
+        re.IGNORECASE,
+    )
+
+    SPAM_SENDER_DOMAINS = {
+        "mailchimp.com",
+        "sendgrid.net",
+        "constantcontact.com",
+        "klaviyo.com",
+        "marketo.com",
+        "hubspot.com",
+        "mailerlite.com",
+        "campaignmonitor.com",
+        "aweber.com",
+        "getresponse.com",
+        "benchmark.email",
+        "mcsv.net",
+        "mandrillapp.com",
+        "postmarkapp.com",
+    }
+
+    sender_domain = data.get("senderDomain", "").lower().strip()
+
+    heuristic_spam = False
+    heuristic_reason = ""
+
+    if SPAM_SUBJECT_RE.search(subject):
+        heuristic_spam = True
+        heuristic_reason = "Subject matches known spam pattern"
+    elif sender_domain and any(sender_domain.endswith(d) for d in SPAM_SENDER_DOMAINS):
+        heuristic_spam = True
+        heuristic_reason = f"Sender domain '{sender_domain}' is a bulk-mail provider"
+    elif not subject and len(body) < 20:
+        heuristic_spam = True
+        heuristic_reason = "Empty subject and near-empty body"
+    elif len(re.findall(r"https?://", combined)) > 5:
+        heuristic_spam = True
+        heuristic_reason = "Excessive URLs in email body (likely marketing)"
+    elif SPAM_SUBJECT_RE.search(body[:300]):
+        heuristic_spam = True
+        heuristic_reason = "Body matches known spam pattern"
+
+    if heuristic_spam:
+        logger.info(f"[SpamCheck] Heuristic SPAM — {heuristic_reason}")
+        return jsonify(
+            {"spam": True, "reason": heuristic_reason, "method": "heuristic"}
+        )
+
+    # ── Layer 2: LLM spam classifier (Groq) ──────────────────────────────────
+    groq_key = _os.environ.get("GROQ_API_KEY", "").strip()
+    if groq_key and (subject or body):
+        try:
+            from groq import Groq as _Groq
+
+            client = _Groq(api_key=groq_key)
+
+            prompt = (
+                "You are a spam classifier for an IT helpdesk inbox at an electricity "
+                "transmission company (POWERGRID). Employees email in with genuine IT "
+                "support issues: password resets, network problems, hardware faults, "
+                "software errors, access requests, etc.\n\n"
+                "Decide if the following email is SPAM (promotional, marketing, newsletter, "
+                "phishing, irrelevant, auto-generated bulk mail) or a GENUINE IT support "
+                "request from an employee.\n\n"
+                f"Subject: {subject or '(none)'}\n"
+                f"Body excerpt: {body or '(empty)'}\n\n"
+                "Reply ONLY with valid JSON in this exact format, no extra text:\n"
+                '{"spam": true, "reason": "one sentence"}\n'
+                "or\n"
+                '{"spam": false, "reason": "one sentence"}'
+            )
+
+            completion = client.chat.completions.create(
+                model="llama-3.1-8b-instant",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.0,
+                max_tokens=80,
+            )
+
+            raw = completion.choices[0].message.content.strip()
+            # Extract JSON even if wrapped in markdown fences
+            json_match = re.search(r"\{.*\}", raw, re.DOTALL)
+            if json_match:
+                result = json.loads(json_match.group())
+                is_spam = bool(result.get("spam", False))
+                reason = result.get("reason", "LLM classification")
+                logger.info(f"[SpamCheck] Groq → spam={is_spam} | {reason}")
+                return jsonify({"spam": is_spam, "reason": reason, "method": "groq"})
+
+        except Exception as e:
+            logger.warning(f"[SpamCheck] Groq failed, failing open: {e}")
+
+    # ── Fail open — if everything fails, let it through ──────────────────────
+    return jsonify(
+        {"spam": False, "reason": "No spam signals detected", "method": "heuristic"}
     )
 
 

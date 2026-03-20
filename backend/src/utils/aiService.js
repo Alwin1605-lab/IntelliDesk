@@ -58,9 +58,19 @@ const predictSLABreach = async (priority, createdAt, currentTime) => {
   }
 };
 
-const chatbotResponse = async (message) => {
+const checkEmailSpam = async (subject, body, senderDomain = '') => {
   try {
-    const { data } = await aiClient.post('/chatbot', { message });
+    const { data } = await aiClient.post('/spam-check', { subject, body, senderDomain });
+    return data; // { spam: bool, reason: str, method: str }
+  } catch (err) {
+    console.error('AI spam-check error:', err.message);
+    return { spam: false, reason: 'check failed', method: 'error' }; // fail open
+  }
+};
+
+const chatbotResponse = async (message, history = [], kbContext = '') => {
+  try {
+    const { data } = await aiClient.post('/chatbot', { message, history, kbContext });
     return data;
   } catch (err) {
     console.error('AI chatbot error:', err.message);
@@ -123,4 +133,4 @@ function getDefaultSuggestions(category) {
   return suggestions[category] || suggestions.other;
 }
 
-module.exports = { classifyTicket, suggestSolution, findSimilarTickets, analyzeRootCause, predictSLABreach, chatbotResponse };
+module.exports = { classifyTicket, suggestSolution, findSimilarTickets, analyzeRootCause, predictSLABreach, chatbotResponse, checkEmailSpam };

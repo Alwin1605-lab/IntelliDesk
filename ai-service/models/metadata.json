@@ -1,0 +1,40 @@
+{
+  "category_accuracy": 0.7695535414568647,
+  "priority_accuracy": 0.6210976837865055,
+  "categories": [
+    "network",
+    "software",
+    "hardware",
+    "authentication",
+    "email",
+    "database",
+    "security",
+    "hr",
+    "other"
+  ],
+  "priorities": [
+    "critical",
+    "high",
+    "medium",
+    "low"
+  ],
+  "sla_hours": {
+    "critical": 1,
+    "high": 4,
+    "medium": 24,
+    "low": 72
+  },
+  "team_map": {
+    "network": "Network Team",
+    "hardware": "IT Support",
+    "software": "Software Team",
+    "authentication": "Identity & Access Team",
+    "email": "Email & Collaboration Team",
+    "database": "Database Team",
+    "security": "Security Operations",
+    "hr": "HR Team",
+    "other": "General IT Support"
+  },
+  "corpus_size": 5000,
+  "total_training_rows": 59578
+}

@@ -16,8 +16,27 @@ router.post('/register', async (req, res) => {
     if (!name || !email || !password) {
       return res.status(400).json({ message: 'Name, email, and password are required' });
     }
-    const existing = await User.findOne({ email });
-    if (existing) return res.status(400).json({ message: 'Email already registered' });
+    const existing = await User.findOne({ email }).select('+password');
+    if (existing) {
+      // Allow a shadow user (created by email poller, never logged in) to claim their account
+      const isShadowUser = !existing.lastLogin && existing.department === 'External';
+      if (!isShadowUser) {
+        return res.status(400).json({ message: 'Email already registered' });
+      }
+      // Merge registration data into the shadow account so existing tickets are preserved
+      existing.name = name;
+      existing.password = password; // pre-save hook will hash it
+      existing.department = department || 'IT';
+      existing.role = role || 'user';
+      if (skills) existing.skills = skills;
+      existing.lastLogin = new Date();
+      await existing.save();
+      const token = signToken(existing._id);
+      return res.status(200).json({
+        token,
+        user: { _id: existing._id, name: existing.name, email: existing.email, role: existing.role, department: existing.department }
+      });
+    }
 
     const user = await User.create({ name, email, password, role: role || 'user', department, skills });
     const token = signToken(user._id);

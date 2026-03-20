@@ -23,15 +23,18 @@ services:
       - "3001:3001"
     volumes:
       - ./backend/dataset:/app/dataset:ro
+      - ai_models:/app/models
     environment:
       - FLASK_ENV=production
       - PORT=3001
       - DATASET_PATH=/app/dataset
+      - GROQ_API_KEY=${GROQ_API_KEY:-}
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3001/health"]
-      interval: 15s
-      timeout: 5s
-      retries: 5
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:3001/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 120s
 
   backend:
     build:
@@ -39,6 +42,9 @@ services:
       dockerfile: Dockerfile
     container_name: helpdesk_backend
     restart: unless-stopped
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
     ports:
       - "5000:5000"
     environment:
@@ -53,6 +59,12 @@ services:
       - SLA_HIGH_HOURS=4
       - SLA_MEDIUM_HOURS=24
       - SLA_LOW_HOURS=72
+      - EMAIL_USER=tech16052006@gmail.com
+      - EMAIL_PASS=iibr wjia auxt xrri
+      - EMAIL_HOST=smtp.gmail.com
+      - EMAIL_PORT=587
+      - EMAIL_IMAP_HOST=imap.gmail.com
+      - EMAIL_IMAP_PORT=993
     depends_on:
       mongodb:
         condition: service_healthy
@@ -75,9 +87,9 @@ services:
     depends_on:
       backend:
         condition: service_healthy
-    environment:
-      - REACT_APP_API_URL=http://localhost:5000/api
 
 volumes:
   mongo_data:
     name: helpdesk_mongo_data
+  ai_models:
+    name: helpdesk_ai_models
