@@ -75,8 +75,8 @@ pip-wheel-metadata/
 *.weights
 
 # Dataset files (large CSV and archives)
-backend/dataset/*.csv
-backend/dataset.zip
+# backend/dataset/*.csv
+# backend/dataset.zip
 *.zip
 !**/.gitkeep
 
